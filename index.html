@@ -162,14 +162,14 @@
             "Rosto detectado | Índice dos olhos: " +
             average.toFixed(3);
 
-          if (average < 0.18) {
+          if (average < 0.14) {
             if (closedSince === null) {
               closedSince = performance.now();
             }
 
             const duration = performance.now() - closedSince;
 
-            if (duration >= 1500) {
+            if (duration >= 2000) {
               status.textContent =
                 "ALERTA: OLHOS FECHADOS";
               report("SONOLENCIA");
