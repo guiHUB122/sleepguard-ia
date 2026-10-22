@@ -5,6 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SleepGuard IA</title>
+
   <style>
     body {
       margin: 0;
@@ -14,7 +15,11 @@
       font-family: Arial, sans-serif;
       text-align: center;
     }
-    h2 { color: #55d6be; }
+
+    h2 {
+      color: #55d6be;
+    }
+
     video {
       width: 100%;
       max-width: 480px;
@@ -22,6 +27,7 @@
       transform: scaleX(-1);
       background: #263238;
     }
+
     #status {
       margin: 16px 0;
       padding: 14px;
@@ -29,26 +35,21 @@
       background: #263238;
       font-weight: bold;
     }
-    button {
-      padding: 12px 20px;
-      border: 0;
-      border-radius: 8px;
-      background: #55d6be;
-      color: #101820;
-      font-size: 16px;
-      font-weight: bold;
+
+    p {
+      color: #c9d3dc;
     }
-    p { color: #c9d3dc; }
   </style>
 </head>
+
 <body>
   <h2>SleepGuard IA</h2>
   <p>Detector experimental de fechamento dos olhos</p>
 
   <video id="video" autoplay muted playsinline></video>
-  <div id="status">Toque em Iniciar câmera</div>
-  <button id="start">Iniciar câmera</button>
-  <p id="detail">Aguardando inicialização.</p>
+
+  <div id="status">Iniciando câmera e inteligência artificial...</div>
+  <p id="detail">Aguarde a inicialização.</p>
 
   <script type="module">
     import {
@@ -59,22 +60,29 @@
     const video = document.getElementById("video");
     const status = document.getElementById("status");
     const detail = document.getElementById("detail");
-    const start = document.getElementById("start");
 
-    let detector;
+    let detector = null;
     let lastVideoTime = -1;
     let closedSince = null;
     let lastSent = "";
 
+    let initializing = false;
+    let running = false;
+
     function report(message) {
       if (message !== lastSent) {
         lastSent = message;
+
         try {
-          if (window.AppInventor &&
-              window.AppInventor.setWebViewString) {
+          if (
+            window.AppInventor &&
+            window.AppInventor.setWebViewString
+          ) {
             window.AppInventor.setWebViewString(message);
           }
-        } catch (e) {}
+        } catch (error) {
+          console.log("Erro ao enviar mensagem:", error);
+        }
       }
     }
 
@@ -84,18 +92,33 @@
 
     function eyeRatio(points, ids) {
       const p = ids.map(i => points[i]);
+
       const vertical =
-        distance(p[1], p[5]) + distance(p[2], p[4]);
-      const horizontal = 2 * distance(p[0], p[3]);
+        distance(p[1], p[5]) +
+        distance(p[2], p[4]);
+
+      const horizontal =
+        2 * distance(p[0], p[3]);
+
       return horizontal ? vertical / horizontal : 0;
     }
 
     async function initialize() {
-      start.disabled = true;
+      if (initializing || running) return;
+
+      initializing = true;
+
       status.textContent = "Carregando modelo de IA...";
-      detail.textContent = "Aguarde a inicialização.";
+      detail.textContent = "Preparando a câmera...";
 
       try {
+        if (!navigator.mediaDevices ||
+            !navigator.mediaDevices.getUserMedia) {
+          throw new Error(
+            "A câmera não está disponível neste ambiente."
+          );
+        }
+
         const vision = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
         );
@@ -113,27 +136,45 @@
           }
         );
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
-          audio: false
-        });
+        status.textContent = "Solicitando acesso à câmera...";
+        detail.textContent =
+          "Se solicitado, autorize o uso da câmera.";
+
+        const stream =
+          await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user" },
+            audio: false
+          });
 
         video.srcObject = stream;
         await video.play();
 
+        running = true;
+
         status.textContent = "Câmera iniciada";
         detail.textContent = "Procurando rosto...";
+
         report("CAMERA_ON");
         requestAnimationFrame(analyze);
+
       } catch (error) {
         status.textContent = "Não foi possível iniciar";
-        detail.textContent = error.name + ": " + error.message;
+
+        detail.textContent =
+          error.name + ": " + error.message;
+
         report("ERRO_CAMERA");
-        start.disabled = false;
+
+        console.error("Erro ao iniciar SleepGuard:", error);
+
+      } finally {
+        initializing = false;
       }
     }
 
     function analyze() {
+      if (!running) return;
+
       if (!detector || video.readyState < 2) {
         requestAnimationFrame(analyze);
         return;
@@ -143,19 +184,26 @@
         lastVideoTime = video.currentTime;
 
         const result = detector.detectForVideo(
-          video, performance.now()
+          video,
+          performance.now()
         );
 
-        if (result.faceLandmarks &&
-            result.faceLandmarks.length > 0) {
+        if (
+          result.faceLandmarks &&
+          result.faceLandmarks.length > 0
+        ) {
           const points = result.faceLandmarks[0];
 
           const left = eyeRatio(
-            points, [33, 160, 158, 133, 153, 144]
+            points,
+            [33, 160, 158, 133, 153, 144]
           );
+
           const right = eyeRatio(
-            points, [362, 385, 387, 263, 373, 380]
+            points,
+            [362, 385, 387, 263, 373, 380]
           );
+
           const average = (left + right) / 2;
 
           detail.textContent =
@@ -167,25 +215,37 @@
               closedSince = performance.now();
             }
 
-            const duration = performance.now() - closedSince;
+            const duration =
+              performance.now() - closedSince;
 
             if (duration >= 2000) {
               status.textContent =
                 "ALERTA: OLHOS FECHADOS";
+
               report("SONOLENCIA");
             } else {
-              status.textContent = "Olhos possivelmente fechados...";
+              status.textContent =
+                "Olhos possivelmente fechados...";
+
               report("ANALISANDO");
             }
+
           } else {
             closedSince = null;
-            status.textContent = "Rosto detectado — olhos abertos";
+
+            status.textContent =
+              "Rosto detectado — olhos abertos";
+
             report("OLHOS_ABERTOS");
           }
+
         } else {
           closedSince = null;
+
           status.textContent = "Nenhum rosto detectado";
-          detail.textContent = "Posicione o rosto diante da câmera.";
+          detail.textContent =
+            "Posicione o rosto diante da câmera.";
+
           report("SEM_ROSTO");
         }
       }
@@ -193,7 +253,10 @@
       requestAnimationFrame(analyze);
     }
 
-    start.addEventListener("click", initialize);
+    // Tenta iniciar automaticamente ao abrir a página.
+    window.addEventListener("load", () => {
+      initialize();
+    });
   </script>
 </body>
 </html>
